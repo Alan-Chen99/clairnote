@@ -27,6 +27,10 @@
 % For docstrings we use ;; instead of the usual "" to allow automated
 % minification for LilyBin + Clairnote.
 
+#(use-modules
+  ((clairnote utils) #:prefix cn:)
+  ((clairnote staff) #:prefix cn:))
+
 %--- UTILITY FUNCTIONS ----------------
 
 #(define (non-zero? n) (not (zero? n)))
@@ -1665,58 +1669,6 @@ accidental-styles.none = #'(#t () ())
 
 %--- USER: EXTENDING STAVES & DIFFERENT OCTAVE SPANS ----------------
 
-#(define (cn-get-new-staff-positions posns base-positions going-up going-down)
-
-   (define recurser
-     (lambda (proc posns extension n)
-       (if (<= n 0)
-           posns
-           (recurser proc (proc posns extension) extension (- n 1)))))
-
-   (define (extend-up posns extension)
-     (let ((furthest (reduce max '() posns)))
-       (append posns (map (lambda (ext) (+ furthest ext)) extension))))
-
-   (define (extend-down posns extension)
-     (let ((furthest (reduce min '() posns)))
-       (append (map (lambda (ext) (- furthest ext)) extension) posns)))
-
-   (let*
-    ((max-bp (reduce max '() base-positions))
-     (min-bp (reduce min '() base-positions))
-     ;; the number of empty positions between staves from one octave to the next
-     ;; 8 for Clairnote
-     (gap (+ min-bp (- 12 max-bp)))
-
-     ;; relative locations of a new octave of staff lines,
-     ;; as if 0 is the the furthest current staff line.  '(8 12) for Clairnote
-     (extension (map (lambda (bp) (+ bp gap (- min-bp))) base-positions))
-     (extension-length (length extension))
-
-     (posns-up
-      (cond
-       ((positive? going-up) (recurser extend-up posns extension going-up))
-       ((negative? going-up)
-        (if (> (length posns) extension-length)
-            (drop-right (sort posns <) extension-length)
-            (begin
-             (ly:warning "\\cnUnextendStaffUp failed, not enough staff to unextend")
-             posns)))
-       (else posns)))
-
-     (posns-down
-      (cond
-       ((positive? going-down) (recurser extend-down posns-up extension going-down))
-       ((negative? going-down)
-        (if (> (length posns) extension-length)
-            (drop (sort posns <) extension-length)
-            (begin
-             (ly:warning "\\cnUnextendStaffDown failed, not enough staff to unextend")
-             posns)))
-       (else posns-up))))
-
-    posns-down))
-
 #(define cnStaffExtender
    (define-music-function
     (reset going-up going-down)
@@ -1724,18 +1676,7 @@ accidental-styles.none = #'(#t () ())
     #{
       \context Staff \applyContext
       #(lambda (context)
-         (if (not (eqv? 'TradStaff (ly:context-name context)))
-             (let*
-              ((grob-def (ly:context-grob-definition context 'StaffSymbol))
-               (current-lines (ly:assoc-get 'line-positions grob-def '(-8 -4 4 8)))
-               ;; base is '(-8 -4) or '(-2 2) for Clairnote
-               (base-lines (ly:context-property context 'cnBaseStaffLines))
-               (posns (if reset base-lines current-lines))
-               (new-posns (cn-get-new-staff-positions
-                           posns base-lines going-up going-down)))
-
-              (ly:context-pushpop-property
-               context 'StaffSymbol 'line-positions new-posns))))
+         (cn:extend-staff context reset going-up going-down))
       \stopStaff
       \startStaff
     #}))
@@ -1744,24 +1685,6 @@ accidental-styles.none = #'(#t () ())
 #(define cnExtendStaffDown #{ \cnStaffExtender ##f 0 1 #})
 #(define cnUnextendStaffUp #{ \cnStaffExtender ##f -1 0 #})
 #(define cnUnextendStaffDown #{ \cnStaffExtender ##f 0 -1 #})
-
-#(define cnStaffOctaveSpan
-   (define-music-function (octaves) (positive-integer?)
-     ;; odd octaves: extended the same amount up and down (from 1)
-     ;; even octaves: extended up one more than they are down
-     (let*
-      ((odd-octs (odd? octaves))
-       (base-lines (if odd-octs '(-2 2) '(-8 -4)))
-       (n (/ (1- octaves) 2))
-       (upwards (if odd-octs n (ceiling n)))
-       (downwards (if odd-octs n (floor n))))
-      #{
-        \set Staff.cnStaffOctaves = #octaves
-        \override Staff.StaffSymbol.cn-staff-octaves = #octaves
-        \set Staff.cnBaseStaffLines = #base-lines
-        \override Staff.StaffSymbol.ledger-positions = #base-lines
-        \cnStaffExtender ##t #upwards #downwards
-      #})))
 
 #(define cnClefPositionShift
    (define-music-function (octaves) (integer?)
@@ -1777,14 +1700,16 @@ accidental-styles.none = #'(#t () ())
 
 #(define cnFiveLineStaff
    #{
-     \cnStaffOctaveSpan 2
-     \override Staff.StaffSymbol.line-positions = #'(-8 -4 0 4 8)
+     \override Staff.StaffSymbol.cn-staff-base = #'(-8 -4 0 4 8)
+     \stopStaff
+     \startStaff
    #})
 
 #(define cnFourLineStaff
    #{
-     \cnStaffOctaveSpan 2
-     \override Staff.StaffSymbol.line-positions = #'(-8 -4 0 4)
+     \override Staff.StaffSymbol.cn-staff-base = #'(-8 -4 4 8)
+     \stopStaff
+     \startStaff
    #})
 
 
@@ -1899,7 +1824,9 @@ accidental-styles.none = #'(#t () ())
 
   ;; Stores the base staff line positions used for extending the staff
   ;; up or down. See cnExtendStaff function.
-  (context-prop 'cnBaseStaffLines list?)
+  (context-prop 'cnStaffBase list?)
+  (context-prop 'cnStaffExtDown integer?)
+  (context-prop 'cnStaffExtUp integer?)
 
   ;; Indicates number of octaves the staff spans, lets us use
   ;; different clef settings so stems always flip at center of staff.
@@ -1970,6 +1897,10 @@ clairnoteTypeUrl = ""
 
   % customize Staff context to make it a Clairnote staff
   \context {
+
+    #(use-modules
+      ((clairnote staff) #:prefix cn:))
+
     \Staff
 
     % CONTEXT PROPERTIES
@@ -1986,7 +1917,6 @@ clairnoteTypeUrl = ""
     printKeyCancellation = ##f
     \numericTimeSignature
 
-    cnBaseStaffLines = #'(-8 -4)
     cnStaffOctaves = #2
     cnClefShift = #0
 
@@ -1997,7 +1927,14 @@ clairnoteTypeUrl = ""
     % GROB PROPERTIES
     \override StaffSymbol.cn-staff-octaves = #2
     \override StaffSymbol.cn-clef-shift = #0
-    \override StaffSymbol.line-positions = #'(-8 -4 4 8)
+
+    \override StaffSymbol.cn-staff-base = #`(-8 -4 (0 (#:color . ,(x11-color 'LightGray))) 4 8)
+    \override StaffSymbol.cn-staff-ext-down = 0
+    \override StaffSymbol.cn-staff-ext-up = 0
+
+    \override StaffSymbol.cn-staff = #cn:StaffSymbol-cn-staff
+    \override StaffSymbol.line-positions = #cn:StaffSymbol-line-positions
+    \override StaffSymbol.stencil = #cn:StaffSymbol-stencil
 
     % staff-space reflects vertical compression of Clairnote staff.
     % Default of 0.75 makes the Clairnote octave 1.28571428571429
@@ -2174,11 +2111,6 @@ initClairnoteSN =
 % Let parent contexts accept TradStaff and TradRhythmicStaff
 % in midi output.
 \midi {
-  \context {
-    \Staff
-    cnBaseStaffLines = #'(-8 -4)
-  }
-
   \context {
     \Staff
     \name TradStaff
