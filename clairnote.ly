@@ -1613,7 +1613,7 @@ accidental-styles.none = #'(#t () ())
    ;; based on StaffSymbol.cn-ledger-recipe."
    '(lambda (staff-symbol pos)
       (let*
-       ((lines (ly:grob-property staff-symbol 'line-positions '(-8 -4 4 8)))
+       ((lines (ly:grob-property staff-symbol 'cn-line-positions-for-ledger '(-8 -4 4 8)))
 
         (nearest-line
          (fold (lambda (line prev)
@@ -1928,13 +1928,15 @@ clairnoteTypeUrl = ""
     \override StaffSymbol.cn-staff-octaves = #2
     \override StaffSymbol.cn-clef-shift = #0
 
-    \override StaffSymbol.cn-staff-base = #`(-8 -4 (0 (#:color . ,(x11-color 'LightGray))) 4 8)
-    \override StaffSymbol.cn-staff-ext-down = 0
-    \override StaffSymbol.cn-staff-ext-up = 0
+    \override StaffSymbol.layer = #-1
+    \override StaffSymbol.cn-staff-base = #cn:default-staff
+    \override StaffSymbol.cn-staff-ext-down = #0
+    \override StaffSymbol.cn-staff-ext-up = #0
 
     \override StaffSymbol.cn-staff = #cn:StaffSymbol-cn-staff
     \override StaffSymbol.line-positions = #cn:StaffSymbol-line-positions
     \override StaffSymbol.stencil = #cn:StaffSymbol-stencil
+    \override StaffSymbol.cn-line-positions-for-ledger = #cn:StaffSymbol-cn-line-positions-for-ledger
 
     % staff-space reflects vertical compression of Clairnote staff.
     % Default of 0.75 makes the Clairnote octave 1.28571428571429

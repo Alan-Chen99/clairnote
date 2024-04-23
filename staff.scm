@@ -108,6 +108,16 @@
 (define (normalize-staff-spec spec)
   (map normalize-staff-spec-1 spec))
 
+(define-public default-staff
+  `(
+    -8
+    -4
+    (0
+     (#:color . ,(x11-color 'Gray))
+     (#:ignore-for-ledger . #t))
+    4
+    8))
+
 (define (compute-staff base ext-down ext-up)
   (let ((base-normalized (normalize-staff-spec base))
         (ans '()))
@@ -128,6 +138,7 @@
 (grob-prop 'cn-staff-base list?)
 (grob-prop 'cn-staff-ext-down integer?)
 (grob-prop 'cn-staff-ext-up integer?)
+(grob-prop 'cn-line-positions-for-ledger list?)
 
 (define-public (StaffSymbol-cn-staff grob)
   (compute-staff
@@ -144,6 +155,12 @@
         (lambda (x) (assoc-ref (cdr x) #:color))
         (ly:grob-property grob 'cn-staff)))
     grob))
+
+(define-public (StaffSymbol-cn-line-positions-for-ledger grob)
+  (map car
+    (filter
+      (lambda (x) (not (assoc-ref (cdr x) #:ignore-for-ledger)))
+      (ly:grob-property grob 'cn-staff))))
 
 (define-public (extend-staff context reset going-up going-down)
   (let ((grob-def (ly:context-grob-definition context 'StaffSymbol)))
