@@ -29,7 +29,8 @@
 
 #(use-modules
   ((clairnote utils) #:prefix cn:)
-  ((clairnote staff) #:prefix cn:))
+  ((clairnote staff) #:prefix cn:)
+  ((clairnote ledger) #:prefix cn:))
 
 %--- UTILITY FUNCTIONS ----------------
 
@@ -1568,75 +1569,6 @@ accidental-styles.none = #'(#t () ())
          (10 0 0)
          (12 2 #f))))
 
-#(define (cn-ledger-pattern dist staff-symbol)
-   ;; Produces the ledger line pattern for a given note.
-   ;; dist is distance of note from closest staff line.
-
-   ;; A cycle is generally an octave, so cycle-size is
-   ;; 12 (staff positions per octave) and cycle-count
-   ;; is the number of octaves we are dealing with.
-   (let*
-    ((recipe (ly:grob-property staff-symbol 'cn-ledger-recipe cn-dn-ledgers-gradual))
-     (cycle-size (list-ref recipe 0))
-     (configs (list-ref recipe 1))
-     (cycle-count (+ 1 (quotient dist cycle-size)))
-     (config-to-ledgers
-      (lambda (config)
-        (let*
-         ((ledger-posn (list-ref config 0))
-          (further-add (list-ref config 1))
-          (nearer-drop (list-ref config 2))
-          (furthest (+ dist further-add))
-          (nearest (if nearer-drop (- dist nearer-drop) 0))
-          ;; Generate the list of ledgers in descending order.
-          (ledgers (reverse (iota cycle-count ledger-posn cycle-size)))
-          (in-range (lambda (l) (and (<= l furthest)
-                                     (>= l nearest)))))
-         (filter in-range ledgers))))
-     (ledger-lists (map config-to-ledgers configs))
-
-     ;; When there is an accidental sign on a note, LilyPond may
-     ;; shorten the furthest ledger, the first in the list.
-     ;; So we merge into one list, keeping descending order
-     (ledger-list (fold (lambda (lst result) (merge lst result >))
-                        '() ledger-lists))
-     ;; But if the note is on a ledger, move that ledger to the
-     ;; front of the list, so that ledger will be shortened.
-     (ledger-list2 (if (memv dist ledger-list)
-                       (cons dist (delv dist ledger-list))
-                       ledger-list)))
-    ledger-list2))
-
-#(define cn-ledger-positions
-   ;; A function that takes a StaffSymbol grob and a vertical
-   ;; position of a note head and returns a list of ledger line positions,
-   ;; based on StaffSymbol.cn-ledger-recipe."
-   '(lambda (staff-symbol pos)
-      (let*
-       ((lines (ly:grob-property staff-symbol 'cn-line-positions-for-ledger '(-8 -4 4 8)))
-
-        (nearest-line
-         (fold (lambda (line prev)
-                 (if (< (abs (- line pos)) (abs (- prev pos)))
-                     line
-                     prev))
-               (car lines)
-               (cdr lines)))
-
-        (diff (- pos nearest-line))
-        (dist (abs diff))
-        (dir (if (negative? diff) -1 1))
-
-        ;; get generic ledger positions and then transform them so
-        ;; they are relative to nearest-line and in the right direction
-        (ledgers0 (cn-ledger-pattern dist staff-symbol))
-        (ledgers1 (map (lambda (n) (+ nearest-line (* dir n)))
-                       ledgers0))
-
-        ;; remove any ledgers that would fall on staff lines
-        (ledgers2 (filter (lambda (n) (not (member n lines)))
-                          ledgers1)))
-       ledgers2)))
 
 
 %--- ARTICULATIONS (SCRIPT GROBS) ----------------
@@ -1651,8 +1583,7 @@ accidental-styles.none = #'(#t () ())
      (nh-pos (ly:grob-staff-position note-head))
 
      (staff-symbol (ly:grob-object grob 'staff-symbol))
-     (ledger-function (eval cn-ledger-positions
-                            (interaction-environment)))
+     (ledger-function cn:cn-ledger-positions)
      (ledger-posns (ledger-function staff-symbol nh-pos))
 
      (max-or-min (if (> direction 0) max min))
@@ -1899,7 +1830,8 @@ clairnoteTypeUrl = ""
   \context {
 
     #(use-modules
-      ((clairnote staff) #:prefix cn:))
+      ((clairnote staff) #:prefix cn:)
+      ((clairnote ledger) #:prefix cn:))
 
     \Staff
 
@@ -1932,11 +1864,15 @@ clairnoteTypeUrl = ""
     \override StaffSymbol.cn-staff-base = #cn:default-staff
     \override StaffSymbol.cn-staff-ext-down = #0
     \override StaffSymbol.cn-staff-ext-up = #0
+    % \override StaffSymbol.Y-extent = #cn:StaffSymbol-Y-extent
+
+    % \override StaffSymbol.show-vertical-skylines = ##t
 
     \override StaffSymbol.cn-staff = #cn:StaffSymbol-cn-staff
+    \override StaffSymbol.cn-staff-to-draw = #cn:StaffSymbol-cn-staff-to-draw
     \override StaffSymbol.line-positions = #cn:StaffSymbol-line-positions
     \override StaffSymbol.stencil = #cn:StaffSymbol-stencil
-    \override StaffSymbol.cn-line-positions-for-ledger = #cn:StaffSymbol-cn-line-positions-for-ledger
+    % \override StaffSymbol.cn-line-positions-for-ledger = #cn:StaffSymbol-cn-line-positions-for-ledger
 
     % staff-space reflects vertical compression of Clairnote staff.
     % Default of 0.75 makes the Clairnote octave 1.28571428571429
@@ -1972,6 +1908,7 @@ clairnoteTypeUrl = ""
     % TODO: whole note ledger lines are a bit too wide
     \override LedgerLineSpanner.length-fraction = 0.45
     \override LedgerLineSpanner.minimum-length-fraction = 0.35
+    \override LedgerLineSpanner.springs-and-rods = ##f
 
     \override Script.Y-offset =
     #(grob-transformer 'Y-offset cn-script-y-offset-callback)
@@ -1984,7 +1921,8 @@ clairnoteTypeUrl = ""
     \override Stem.note-collision-threshold = 2
     \override NoteCollision.note-collision-threshold = 2
 
-    \override StaffSymbol.ledger-positions-function = #cn-ledger-positions
+    \override StaffSymbol.ledger-positions-function = #`(lambda (a b) (,cn:cn-ledger-positions a b))
+    \override LedgerLineSpanner.stencil = #cn:LedgerLineSpanner-stencil
 
     % ENGRAVERS
     % There is also the customized Span_stem_engraver (added in LilyPond 2.19.??)

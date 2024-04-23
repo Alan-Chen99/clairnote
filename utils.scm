@@ -38,3 +38,13 @@
   (set-object-property! symbol 'backend-type? type?)
   (set-object-property! symbol 'backend-doc "custom grob property")
   symbol)
+
+(define-public (index-cell cell dir)
+  (if (equal? dir RIGHT)
+    (cdr cell)
+    (car cell)))
+
+(define-public (index-set-cell! x dir val)
+  (case dir
+    ((-1) (set-car! x val))
+    ((1) (set-cdr! x val))))
