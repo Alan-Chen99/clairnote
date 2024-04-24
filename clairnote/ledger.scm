@@ -1,6 +1,7 @@
 (define-module (clairnote ledger))
 
 (use-modules
+  (ice-9 match)
   (ice-9 curried-definitions)
   (srfi srfi-1)
   (lily)
@@ -44,10 +45,6 @@
          (ledger-list2 (if (memv dist ledger-list)
                         (cons dist (delv dist ledger-list))
                         ledger-list)))
-    ;; (dbg
-    ;;   dist
-    ;;   recipe
-    ;;   ledger-list2)
     ledger-list2))
 
 (define-public (cn-ledger-positions staff-symbol pos)
@@ -55,11 +52,11 @@
   ;; position of a note head and returns a list of ledger line positions,
   ;; based on StaffSymbol.cn-ledger-recipe."
   (let*
-    ((lines (map car
-             (filter
-               (lambda (x) (not (assoc-ref (cdr x) #:ignore-for-ledger)))
-               (ly:grob-property staff-symbol 'cn-staff))))
-
+    ((staff-lines (filter
+                   (lambda (h)
+                     (not (assq-ref (style-at-height staff-symbol h #:pure) #:ledger)))
+                   (ly:grob-property staff-symbol 'line-positions)))
+      (lines (if (null? staff-lines) '(0) staff-lines))
       (nearest-line
         (fold (lambda (line prev)
                (if (< (abs (- line pos)) (abs (- prev pos)))
@@ -129,86 +126,71 @@
         (set! vals (reverse ans))))
     vals))
 
-;; lily/ledger-line-spanner.cc
 (define-public (LedgerLineSpanner-stencil grob)
+  (let* ((staff-symbol (ly:grob-object grob 'staff-symbol)))
+    ;; regression/staff-online-symbol-absence.ly
+    (if (null? staff-symbol)
+      '()
+      (LedgerLineSpanner-stencil-impl staff-symbol grob))))
 
-  (let* ((staff-symbol (ly:grob-object grob 'staff-symbol))
-         (note-heads (ly:grob-array->list (ly:grob-object grob 'note-heads)))
+(define (LedgerLineSpanner-stencil-impl staff-symbol grob)
+  ;; lily/ledger-line-spanner.cc
+  (let* ((line-positions (ly:grob-property staff-symbol 'line-positions))
+         (note-heads-arr (ly:grob-object grob 'note-heads))
+         (note-heads (if (null? note-heads-arr) '()
+                      (ly:grob-array->list note-heads-arr)))
          (length_fraction (ly:grob-property grob 'length-fraction 0.25))
          (staff-space (ly:grob-property staff-symbol 'staff-space 1))
          (pos-f (eval
                  (ly:grob-property staff-symbol 'ledger-positions-function)
                  (interaction-environment)))
-         (common-y (ly:grob-common-refpoint grob staff-symbol Y))
-         (base-coord-y
-           (-
-             (ly:grob-relative-coordinate staff-symbol common-y Y)
-             (ly:grob-relative-coordinate grob common-y Y)))
 
-         (common-x grob)
          (grob-x #f)
          (ledgers-alist '())
          (res-stencil empty-stencil))
-    (for-each
-      (lambda (h)
-        (set! common-x (ly:grob-common-refpoint common-x h X))
-        (when (ly:grob? (ly:grob-object h 'accidental-grob))
-          (set! common-x (ly:grob-common-refpoint common-x (ly:grob-object h 'accidental-grob) X))))
-      note-heads)
-    (set! grob-x (ly:grob-relative-coordinate grob common-x X))
 
-    (for-each
-      (lambda (h)
-        (let* ((x-c (coord-translate (ly:grob-extent h common-x X) (- grob-x)))
-               (y-p (ly:grob-property h 'staff-position))
-               (y-pos #f)
-               (tmp #f))
-          (set! tmp (ly:grob-property h 'ledger-positions))
-          (if (pair? tmp)
-            (set! y-pos tmp)
-            (set! y-pos (pos-f staff-symbol y-p)))
+    (for-each! note-heads nh
+      (let* ((x-extent (grob-extent nh grob X))
+             (y-p (ly:grob-property nh 'staff-position))
+             (y-pos '())
+             (tmp (ly:grob-property nh 'ledger-positions)))
+        (if (pair? tmp)
+          (set! y-pos tmp)
+          (set! y-pos (pos-f staff-symbol y-p)))
 
-          (for-each
-            (lambda (p)
-              (set! ledgers-alist
-                (assv-set! ledgers-alist p
-                  (cons x-c (or (assv-ref ledgers-alist p) '())))))
-            y-pos)))
+        (for-each! y-pos p
+          (set! ledgers-alist
+            (assv-set! ledgers-alist p
+              (cons x-extent (or (assv-ref ledgers-alist p) '())))))))
 
-      note-heads)
+    (for-each! ledgers-alist (h . intervals-list)
+      (let* ((style (style-at-height staff-symbol h))
+             (ledger-thickness (assq-ref style #:ledger-thickness))
+             ;; (y-p (+ base-coord-y (* (car ele) staff-space 0.5)))
+             (line (sort! intervals-list (lambda (a b) (< (car a) (car b))))))
 
-    (for-each
-      (lambda (ele)
-        (let* ((style (staff-style-at-height staff-symbol (car ele)))
-               (ledger-thickness (assq-ref style #:ledger-thickness))
-               (y-p (+ base-coord-y (* (car ele) staff-space 0.5)))
-               (line (sort! (cdr ele) (lambda (a b) (< (car a) (car b)))))
-               (stencil-f (make-staff-line-stencil staff-symbol (car ele))))
-
-          (for-each
-            (lambda (x)
+        (when (and (assq-ref style #:staff) (not (memv h line-positions)))
+          (let ((intervals (remove-small-gaps
+                            (fuse-intervals
+                              (map (lambda (x)
+                                    (interval-widen x
+                                      (* (interval-length x) 2)))
+                                line)))))
+            (for-each! intervals (lb . ub)
               (set! res-stencil
                 (ly:stencil-add
                   res-stencil
-                  (stencil-f (car x) y-p (cdr x) y-p))))
-            (remove-small-gaps
-              (fuse-intervals
-                (map (lambda (x)
-                      (interval-widen x
-                        (* (interval-length x) 2)))
-                  line))))
+                  (make-staff-line-stencil staff-symbol h lb ub))))))
 
-          (when (assq-ref style #:ledger)
-            (for-each
-              (lambda (x)
-                (set! res-stencil
-                  (ly:stencil-add res-stencil
-                    (make-line-stencil ledger-thickness (car x) y-p (cdr x) y-p))))
-              (fuse-intervals
-                (map (lambda (x)
-                      (interval-widen x
-                        (* (interval-length x) length_fraction)))
-                  line))))))
-      ledgers-alist)
+        (when (assq-ref style #:ledger)
+          (let ((intervals (fuse-intervals
+                            (map (lambda (x)
+                                  (interval-widen x
+                                    (* (interval-length x) length_fraction)))
+                              line))))
+            (for-each! intervals (lb . ub)
+              (set! res-stencil
+                (ly:stencil-add res-stencil
+                  (make-staff-line-stencil staff-symbol h lb ub #:thickness ledger-thickness #:color #f))))))))
 
     res-stencil))

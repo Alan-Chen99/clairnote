@@ -27,6 +27,16 @@
 % For docstrings we use ;; instead of the usual "" to allow automated
 % minification for LilyBin + Clairnote.
 
+% https://www.gnu.org/software/guile/manual/html_node/Load-Paths.html
+#(add-to-load-path (dirname (current-filename)))
+
+% #(ly:set-option 'compile-scheme-code #t)
+% #(debug-enable 'backtrace)
+
+% #(newline)
+% #(display %load-path)
+% #(newline)
+
 #(use-modules
   ((clairnote utils) #:prefix cn:)
   ((clairnote staff) #:prefix cn:)
@@ -1617,6 +1627,23 @@ accidental-styles.none = #'(#t () ())
 #(define cnUnextendStaffUp #{ \cnStaffExtender ##f -1 0 #})
 #(define cnUnextendStaffDown #{ \cnStaffExtender ##f 0 -1 #})
 
+#(define cnStaffOctaveSpan
+   (define-music-function (octaves) (positive-integer?)
+     ;; odd octaves: extended the same amount up and down (from 1)
+     ;; even octaves: extended up one more than they are down
+     (let*
+      ((odd-octs (odd? octaves))
+       (n (/ (1- octaves) 2))
+       (upwards (if odd-octs n (ceiling n)))
+       (downwards (if odd-octs n (floor n))))
+      #{
+        \set Staff.cnStaffOctaves = #octaves
+        \override Staff.StaffSymbol.cn-staff-octaves = #octaves
+        \cnStaffExtender ##t #upwards #downwards
+        \stopStaff
+        \startStaff
+      #})))
+
 #(define cnClefPositionShift
    (define-music-function (octaves) (integer?)
      #{
@@ -1631,14 +1658,14 @@ accidental-styles.none = #'(#t () ())
 
 #(define cnFiveLineStaff
    #{
-     \override Staff.StaffSymbol.cn-staff-base = #'(-8 -4 0 4 8)
+     \override Staff.StaffSymbol.cn-staff-style = #cn:staff-style-5-lines
      \stopStaff
      \startStaff
    #})
 
 #(define cnFourLineStaff
    #{
-     \override Staff.StaffSymbol.cn-staff-base = #'(-8 -4 4 8)
+     \override Staff.StaffSymbol.cn-staff-style = #cn:staff-style-default
      \stopStaff
      \startStaff
    #})
@@ -1861,18 +1888,16 @@ clairnoteTypeUrl = ""
     \override StaffSymbol.cn-clef-shift = #0
 
     \override StaffSymbol.layer = #-1
-    \override StaffSymbol.cn-staff-base = #cn:default-staff
-    \override StaffSymbol.cn-staff-ext-down = #0
-    \override StaffSymbol.cn-staff-ext-up = #0
-    % \override StaffSymbol.Y-extent = #cn:StaffSymbol-Y-extent
 
-    % \override StaffSymbol.show-vertical-skylines = ##t
+    \override StaffSymbol.cn-staff-style = #cn:staff-style-default
+    \override StaffSymbol.cn-internal-staff-style-normalized = #cn:internal-staff-style-normalized
+    \override StaffSymbol.cn-internal-staff-style-normalized-pure = #cn:internal-staff-style-normalized-pure
 
-    \override StaffSymbol.cn-staff = #cn:StaffSymbol-cn-staff
-    \override StaffSymbol.cn-staff-to-draw = #cn:StaffSymbol-cn-staff-to-draw
+    \override StaffSymbol.cn-staff-upper = #8
+    \override StaffSymbol.cn-staff-lower = #-8
+
     \override StaffSymbol.line-positions = #cn:StaffSymbol-line-positions
     \override StaffSymbol.stencil = #cn:StaffSymbol-stencil
-    % \override StaffSymbol.cn-line-positions-for-ledger = #cn:StaffSymbol-cn-line-positions-for-ledger
 
     % staff-space reflects vertical compression of Clairnote staff.
     % Default of 0.75 makes the Clairnote octave 1.28571428571429
@@ -1906,8 +1931,8 @@ clairnoteTypeUrl = ""
     \override TimeSignature.before-line-breaking = #cn-time-signature-grob-callback
 
     % TODO: whole note ledger lines are a bit too wide
-    \override LedgerLineSpanner.length-fraction = 0.45
-    \override LedgerLineSpanner.minimum-length-fraction = 0.35
+    % \override LedgerLineSpanner.length-fraction = 0.45
+    % \override LedgerLineSpanner.minimum-length-fraction = 0.35
     \override LedgerLineSpanner.springs-and-rods = ##f
 
     \override Script.Y-offset =
