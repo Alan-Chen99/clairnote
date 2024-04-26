@@ -4,212 +4,249 @@
   (ice-9 match)
   (ice-9 curried-definitions)
   (srfi srfi-1)
+  (srfi srfi-8)
+  (srfi srfi-17)
+  (srfi srfi-43)
   (lily)
-  (clairnote utils))
+  (clairnote utils)
+  (clairnote region)
+  (clairnote stencil))
 
-;; TODO: make an actual validator
-(grob-prop 'cn-staff-style list?)
-(grob-prop 'cn-staff-lower integer?)
-(grob-prop 'cn-staff-upper integer?)
+(grob-prop 'cn-staff-range
+  (lambda (x)
+    (and (pair? x)
+      (exact? (car x))
+      (exact? (cdr x)))))
+(grob-prop 'cn-internal-staff-range-engraved pair?)
 
-(grob-prop 'cn-internal-staff-style-normalized list?)
-(grob-prop 'cn-internal-staff-style-normalized-pure list?)
+(define-public (StaffSymbol-cn-staff-range grob)
+  (ly:grob-property grob 'cn-internal-staff-range-engraved '(-8 . 8)))
 
-(define-public staff-style-default
-  `(
-    (4
-     (#:staff . #t))
-    (8
-     (#:staff . #t))))
+(context-prop 'cnInternalStaffRange pair?)
 
-(define-public staff-style-5-lines
-  `(
-    (0
-     ;; (#:color . ,(x11-color 'Gray))
-     (#:color . ,(rgb-color 0.5 0.5 0.5))
-     (#:staff . #t)
-     (#:always-ledger . #t))
-    (4
-     (#:staff . #t))
-    (8
-     (#:staff . #t))))
+;; this shifts staff-position of notes by some integer amount
+;; currently only exposed through \cnExperimentalYshift
+;; imo this is bad since it makes 'staff-position of stuff different from what the user expects
+(context-prop 'cnInternalYshift integer?)
+(grob-prop 'cn-internal-yshift integer?)
 
-(define (normalize-style-one-pure staff-symbol)
-  (lambda (style)
-    (let* ((color (assq-ref style #:color))
-           (staff (assq-ref style #:staff))
-           (ledger (or (not staff) (assq-ref style #:always-ledger))))
-      `(
-        (#:staff . ,staff)
-        (#:color . ,color)
-        (#:ledger . ,ledger)))))
+(define-public (internal-extend-staff context reset going-up going-down)
+  (match-let* (((a . b) (ly:context-property context 'cnInternalStaffRange '(-8 . 8)))
+               (newa (- (if reset -8 a) (* 12 going-down)))
+               (newb (+ (if reset 8 b) (* 12 going-up))))
+    (set! (ly:context-property context 'cnInternalStaffRange) (cons newa newb))))
 
-(define (normalize-style-one staff-symbol)
-  (let* ((thickness (* (ly:grob-property staff-symbol 'thickness 1.0)
-                     (ly:output-def-lookup (ly:grob-layout staff-symbol) 'line-thickness)))
-         ;; TODO: this is different from Staff_symbol::staff_space
+(define-public (internal-set-yshift context val)
+  (set! (ly:context-property context 'cnInternalYshift) val))
+
+(grob-prop 'cn-internal-staff-cached scheme?)
+
+(define-public (StaffSymbol-line-positions grob)
+  (match-let* ((shift (ly:grob-property-data grob 'cn-internal-yshift))
+               ((x . y) (ly:grob-property grob 'cn-staff-range '(-8 . 8)))
+               (l (+ x shift))
+               (u (+ y shift)))
+    (if (< l u)
+      (list l u)
+      (if (eqv? l u)
+        (list l)
+        '()))))
+
+(define-public (compute-staff-regions staff-symbol)
+  (let* ((vert-group (ly:grob-object staff-symbol 'axis-group-parent-Y))
+         (ledger-line-spanner #f)
+         (note-heads '())
+         (length-fraction 0.25)
          (staff-space (ly:grob-property staff-symbol 'staff-space 1))
+         (yshift (ly:grob-property-data staff-symbol 'cn-internal-yshift))
+         (region-as-real-ycoord
+           (lambda (region)
+             (region-mapbox region
+               (lambda (x1 x2 y1 y2)
+                 (region-box x1 x2
+                   (* (+ y1 yshift) staff-space 1/2)
+                   (* (+ y2 yshift) staff-space 1/2)))))))
+
+    (dolist! (e (grob-array->list-safe (ly:grob-object vert-group 'elements)))
+      (when (grob::has-interface e 'ledger-line-spanner-interface)
+        (when (eq? (ly:grob-object e 'staff-symbol) staff-symbol)
+          (assert! (not ledger-line-spanner))
+          (set! ledger-line-spanner e))))
+
+    (when ledger-line-spanner
+      (set! length-fraction
+        (ly:grob-property ledger-line-spanner 'length-fraction 0.25))
+
+      (set! note-heads
+        (grob-array->list-safe
+          (ly:grob-object ledger-line-spanner 'note-heads))))
+
+    (let ((ctx `((#:cn-internal-yshift . ,yshift)
+                 (#:staff-symbol . ,staff-symbol)
+                 (#:coord-base . ,staff-symbol)
+                 (#:note-heads . ,note-heads)
+                 (#:debug-regions . ,(list))
+                 (#:LedgerLineSpanner-length-fraction . ,length-fraction)
+                 (#:region-as-real-ycoord . ,region-as-real-ycoord)
+                 (#:avoid . ,(list))
+                 (#:draw . ,(list))))
+          (staff-fn (ly:grob-property-data staff-symbol 'cn-staff)))
+
+      ;; (benchmark
+      ;;   (staff-fn ctx))
+      (staff-fn ctx)
+
+      (set! ctx
+        (assq-set! ctx #:avoid-with-real-ycoord (map region-as-real-ycoord (assq-ref ctx #:avoid))))
+
+      ;; (dbg (assq-ref ctx #:avoid))
+      ;; (dbg (assq-ref ctx #:avoid-with-real-ycoord))
+
+      ctx)))
+
+(define-public (StaffSymbol-stencil staff-symbol)
+
+  (let* ((ctx (ly:grob-property staff-symbol 'cn-internal-staff-cached))
+         (yshift (assq-ref ctx #:cn-internal-yshift))
+         (staff-space (ly:grob-property staff-symbol 'staff-space 1))
+         (thickness
+           (* (ly:grob-property staff-symbol 'thickness 1.0)
+             (ly:output-def-lookup (ly:grob-layout staff-symbol) 'line-thickness)))
          (tmp-ledger-thickness (ly:grob-property staff-symbol 'ledger-line-thickness '(1.0 . 0.1)))
          (ledger-thickness (+
                             (* (car tmp-ledger-thickness) thickness)
-                            (* (cdr tmp-ledger-thickness) staff-space))))
-    (lambda (style)
-      (let* ((color (assq-ref style #:color))
-             (staff (assq-ref style #:staff))
-             (ledger (or (not staff) (assq-ref style #:always-ledger))))
-        `(
-          (#:staff . ,staff)
-          (#:color . ,color)
-          (#:thickness . ,thickness)
-          (#:staff-space . ,staff-space)
-          (#:ledger-thickness . ,ledger-thickness)
-          (#:ledger . ,ledger))))))
+                            (* (cdr tmp-ledger-thickness) staff-space)))
+         (inherit-props `((staff
+                           (#:thickness . ,thickness))
+                          (ledger
+                           (#:thickness . ,ledger-thickness))))
+         (res-stencil empty-stencil)
+         (region-as-real-ycoord (assq-ref ctx #:region-as-real-ycoord)))
 
-(define ((internal-staff-style-normalized-impl pure) staff-symbol)
-  (let ((cn-staff-style (ly:grob-property staff-symbol 'cn-staff-style staff-style-default))
-        (norm-f ((if pure normalize-style-one-pure normalize-style-one) staff-symbol))
-        (ans '()))
-    (for-each! cn-staff-style (h . style)
-      (if (number? h)
-        ;; always float for consistency
-        (push (cons (floor-remainder h 12.0) (norm-f style)) ans)
-        (if (eq? h #:default)
-          (push (cons #:default (norm-f style)) ans)
-          (error "invalid: ~a" h))))
+    (for-each! (reverse (assq-ref ctx #:draw)) spec
+      (let* ((region (region-as-real-ycoord (assq-ref spec #:region)))
+             (inherit (assq-ref inherit-props (assq-ref spec #:inherit)))
+             (color (or (assq-ref spec #:color) (assq-ref inherit #:color)))
+             (thickness (or (assq-ref spec #:thickness) (assq-ref inherit #:thickness)))
+             (stencil (assq-ref spec #:stencil)))
+        (set! res-stencil
+          (ly:stencil-add
+            res-stencil
+            (if (eq? stencil 'box)
+              (rg-stencil-box region #:color color)
+              (rg-stencil-hline region #:thickness thickness #:color color))))))
 
-    (unless (assq-ref ans #:default)
-      (push (cons #:default (norm-f '())) ans))
+    (map
+      (lambda (region color)
+        (set! region (region-as-real-ycoord region))
+        (set! res-stencil
+          (ly:stencil-add
+            res-stencil
+            (rg-stencil-auto region #:color color))))
+      (assq-ref ctx #:debug-regions)
+      '("blue" "red" "green"))
 
-    ans))
+    res-stencil))
 
-(define-public internal-staff-style-normalized (internal-staff-style-normalized-impl #f))
-(define-public internal-staff-style-normalized-pure (internal-staff-style-normalized-impl #t))
+(define (rg-noteheads-impl ctx)
+  (let ((yshift (assq-ref ctx #:cn-internal-yshift))
+        (note-heads (assq-ref ctx #:note-heads))
+        (coord-base (assq-ref ctx #:coord-base))
+        (length-fraction (assq-ref ctx #:LedgerLineSpanner-length-fraction)))
 
-(export style-at-height)
-(define* (style-at-height staff-symbol h #:optional pure)
-  (let ((staff (ly:grob-property staff-symbol
-                (if pure
-                  'cn-internal-staff-style-normalized-pure
-                  'cn-internal-staff-style-normalized)))
-        (ans #f))
-    (set! h (floor-remainder h 12.0))
-    (for-each! staff (h2 . style)
-      (when (and (number? h2) (close? h h2))
-        (set! ans style)))
-    (or ans (assq-ref staff #:default))))
+    ;; (length-fraction (ly:grob-property grob 'length-fraction 0.25))
 
-(define-public style-at-height-one
-  (lambda* (staff-symbol h prop #:optional pure)
-    (assq-ref (style-at-height staff-symbol h pure) prop)))
+    (apply union
+      (map-list (nh note-heads)
+        (let* ((nh-extent (grob-extent nh coord-base X))
+               (x-extent (interval-widen nh-extent (* length-fraction (interval-length nh-extent))))
+               (y-p (- (ensure-exact-or-inf (ly:grob-property nh 'staff-position) 1/20)
+                     yshift)))
+          (region-box
+            (ensure-exact-or-inf (car x-extent) 1/10)
+            (ensure-exact-or-inf (cdr x-extent) 1/10)
+            y-p
+            y-p))))))
 
-(define-public (StaffSymbol-line-positions grob)
-  (let ((lower (ly:grob-property grob 'cn-staff-lower))
-        (upper (ly:grob-property grob 'cn-staff-upper)))
-
-    (filter
-      (lambda (h) (style-at-height-one grob h #:staff #:pure))
-      (iota (max 1 (+ (- upper lower) 1)) lower))))
+(define-public (rg-noteheads ctx)
+  (region-cache-with ctx #:rg-noteheads-cached
+    (lambda ()
+      (rg-noteheads-impl ctx))))
 
 ;; TODO: this impl is not complete
-(define (staff-line-range staff-symbol)
-
-  ;; (if (and (not (ly:item-break-dir bound))
-  ;;      (not (interval-empty? bound-ext)))
-  ;;   (index-set-cell! span-points dir
-  ;;     (+ (index-cell span-points dir)
-  ;;       (index-cell bound-ext dir))))
-
+(define (staff-line-range staff-symbol coord-base)
   (let ((l-b (ly:spanner-bound staff-symbol LEFT))
         (r-b (ly:spanner-bound staff-symbol RIGHT)))
-    ;; (dbg (grob-extent r-b staff-symbol X))
-    (ly:item-break-dir r-b)
+    ;; (ly:item-break-dir r-b)
 
-    (cons
-      (grob-coord l-b staff-symbol X)
+    (values
+      (grob-coord l-b coord-base X)
       ;; when extending staff as the same time as changing clef
       ;; we extend more to the right.
-      ;; (if (ly:item-break-dir r-b)
-      ;;   (grob-coord r-b staff-symbol X)
-      ;;   (max
-      ;;     (cdr (grob-extent r-b staff-symbol X))
-      ;;     (grob-coord r-b staff-symbol X)))
       (max
-        (cdr (grob-extent r-b staff-symbol X))
-        (grob-coord r-b staff-symbol X)))))
+        (cdr (grob-extent r-b coord-base X))
+        (grob-coord r-b coord-base X)))))
 
-(export make-staff-line-stencil)
-(define* (make-staff-line-stencil staff-symbol h startx endx
-          #:key
-          (color '())
-          (thickness #f))
-  ;; see lily/staff-symbol.cc Staff_symbol::print
-  (let* ((style (style-at-height staff-symbol h))
-         (color (if (null? color) (assq-ref style #:color) color))
-         (thickness (or thickness (assq-ref style #:thickness)))
-         (staff-space (assq-ref style #:staff-space))
+(define (rg-staff-hbound-impl ctx)
+  (let* ((staff-symbol (assq-ref ctx #:staff-symbol))
+         (coord-base (assq-ref ctx #:coord-base)))
+    (receive (a b) (staff-line-range staff-symbol coord-base)
+      (region-box
+        (inexact->exact a)
+        (inexact->exact b)
+        -inf.0
+        +inf.0))))
 
-         (shrink (/ thickness 2))
-         ;; (shrink 0)
-         (y (* h staff-space 0.5))
-         (bounds (interval-intersection
-                  (cons startx endx)
-                  (staff-line-range staff-symbol)))
-         (ans (make-line-stencil thickness
-               (+ (car bounds) shrink)
-               y
-               (- (cdr bounds) shrink)
-               y)))
-    (when color
-      (if (pair? color)
-        (set! ans
-          (ly:stencil-in-color ans
-            (first color)
-            (second color)
-            (third color)))
-        (set! ans
-          (ly:stencil-in-color ans
-            color))))
-    ans))
+(define-public (rg-staff-hbound ctx)
+  (region-cache-with ctx #:rg-staff-hbound-cached
+    (lambda ()
+      (rg-staff-hbound-impl ctx))))
 
-(define-public (StaffSymbol-stencil staff-symbol)
-  ;; see also
-  ;; http://lsr.di.unimi.it/LSR/Item?id=700
-  ;; (by Neil Puttock)
+(define (rg-staff-impl ctx)
+  (match-let* ((staff-symbol (assq-ref ctx #:staff-symbol))
+               ((a . b) (ly:grob-property staff-symbol 'cn-staff-range '(-8 . 8))))
+    (intersect
+      (rg-staff-hbound ctx)
+      (region-box
+        -inf.0
+        +inf.0
+        a
+        b))))
 
-  ;; (dbg 'StaffSymbol-stencil)
-  ;; (dbg
-  ;;   staff-symbol
-  ;;   (ly:grob-property staff-symbol 'width)
+(define-public (rg-staff ctx)
+  (region-cache-with ctx #:rg-staff-cached
+    (lambda ()
+      (rg-staff-impl ctx))))
 
-  ;;   (ly:spanner-bound staff-symbol LEFT)
-  ;;   (ly:spanner-bound staff-symbol RIGHT)
+(define (remove-small-gaps vals)
+  (let ((changed #t))
+    (while changed
+      (set! changed #f)
+      (let ((cur-start #f)
+            (cur-end #f)
+            (ans '()))
+        (for-each
+          (lambda (x)
+            (if (and cur-start (< (* 5 (- (car x) cur-end)) (- (cdr x) cur-start)))
+              (begin
+                (set! changed #t)
+                (set! cur-end (cdr x)))
+              (begin
+                (when cur-start
+                  (set! ans (cons (cons cur-start cur-end) ans)))
+                (set! cur-start (car x))
+                (set! cur-end (cdr x))))
+            x)
+          vals)
+        (set! ans (cons (cons cur-start cur-end) ans))
+        (set! vals (reverse ans))))
+    vals))
 
-  ;;   (ly:grob-object (ly:spanner-bound staff-symbol LEFT) 'elements)
-  ;;   (ly:grob-object (ly:spanner-bound staff-symbol RIGHT) 'elements)
+(define-public (remove-small-gaps-x region)
+  (region-map-rows region remove-small-gaps))
 
-  ;;   (grob-coord (ly:spanner-bound staff-symbol LEFT) staff-symbol X)
-  ;;   (grob-coord (ly:spanner-bound staff-symbol RIGHT) staff-symbol X)
-  ;;   (grob-extent (ly:spanner-bound staff-symbol LEFT) staff-symbol X)
-  ;;   (grob-extent (ly:spanner-bound staff-symbol RIGHT) staff-symbol X)
-
-  ;;   (ly:item-break-dir (ly:spanner-bound staff-symbol LEFT))
-  ;;   (ly:item-break-dir (ly:spanner-bound staff-symbol RIGHT)))
-
-  (let ((ans empty-stencil))
-    (for-each
-      (lambda (h)
-        (set! ans
-          (ly:stencil-add
-            ans
-            (make-staff-line-stencil staff-symbol h -inf.0 +inf.0))))
-      (ly:grob-property staff-symbol 'line-positions))
-    ans))
-
-(define-public (extend-staff context reset going-up going-down)
-  (let ((grob-def (ly:context-grob-definition context 'StaffSymbol)))
-
-    (ly:context-pushpop-property context 'StaffSymbol 'cn-staff-upper
-      (+ (if reset 8 (ly:assoc-get 'cn-staff-upper grob-def)) (* 12 going-up)))
-
-    (ly:context-pushpop-property context 'StaffSymbol 'cn-staff-lower
-      (- (if reset -8 (ly:assoc-get 'cn-staff-lower grob-def)) (* 12 going-down)))))
+(define-public (mirror-to-height ctx height lb ub)
+  (let* ((r (rg-noteheads ctx)))
+    (set! r (shift-y r (- height ub) (- height lb)))
+    (set! r (select-remainder-y r height 12))
+    r))

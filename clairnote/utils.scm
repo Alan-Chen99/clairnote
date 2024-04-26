@@ -31,6 +31,37 @@
         (list . expr)
         (current-source-location)))))
 
+(define-public (assert-impl val expr loc)
+  (unless val
+    (let ((msg (format #f "~%assertion failed (~a): ~a~%" (format-loc loc) expr)))
+      (error msg))))
+
+(define-syntax-public assert!
+  (syntax-rules ()
+    ((_ expr)
+      (assert-impl
+        expr
+        (quote expr)
+        (current-source-location)))))
+
+(define-public (benchmark-impl start-t val end-t expr loc)
+  (format (current-error-port)
+    "~%~a~%~a: ~a seconds~%"
+    (format-loc loc)
+    expr
+    (/ (exact->inexact (- end-t start-t)) internal-time-units-per-second))
+  val)
+
+(define-syntax-public benchmark
+  (syntax-rules ()
+    ((_ expr)
+      (benchmark-impl
+        (get-internal-real-time)
+        expr
+        (get-internal-real-time)
+        (quote expr)
+        (current-source-location)))))
+
 (export for-each!)
 (define-macro for-each!
   (lambda* (val binding #:rest body)
@@ -40,19 +71,68 @@
         ,@body))
       ,val)))
 
-;; (define-public (foreach-alist f alist)
-;;   (for-each
-;;     (lambda (obj)
-;;       (f (car obj) (cdr obj)))
-;;     alist))
+(export dolist!)
+(define-macro dolist!
+  (lambda* (spec #:rest body)
+    (match-let (((var v) spec))
+      `(let ((tmp--list ,v))
+        (while (not (null? tmp--list))
+         (match-let ((,var (car tmp--list)))
+          ,@body)
+         (set! tmp--list (cdr tmp--list)))))))
 
 (export push)
 (define-macro (push x y)
   `(set! ,y (cons ,x ,y)))
 
-(define-public (close? x y)
-  (let ((tolerance 0.01))
-    (< (abs (- x y)) tolerance)))
+(export pop)
+(define-macro (pop x)
+  `(let ((tmp--ans (car ,x)))
+    (set! ,x (cdr ,x))
+    tmp--ans))
+
+(export inc)
+(define-macro (inc x)
+  `(set! ,x (1+ ,x)))
+
+(export for)
+(define-macro for
+  (lambda* (spec #:rest body)
+    (match-let (((var lb ub) spec))
+      `(do ((,var ,lb (1+ ,var))) ((>= ,var ,ub))
+        ,@body))))
+
+(export for-vec)
+(define-macro for-vec
+  (lambda* (spec #:rest body)
+    (match-let (((var v) spec))
+      `(let ((tmp--vec ,v))
+        (for (tmp--i 0 (vector-length tmp--vec))
+         (match-let ((,var (vector-ref tmp--vec tmp--i)))
+          ,@body))))))
+
+(export map-list)
+(define-macro map-list
+  (lambda* (spec #:rest body)
+    (match-let (((var v) spec))
+      `(map
+        (lambda (x)
+         (match-let ((,var x))
+          ,@body))
+        ,v))))
+
+(define-public (close? x y tolerance)
+  (< (abs (- x y)) tolerance))
+
+(define-public (odd?-safe x)
+  (if (integer? x)
+    (odd? x)
+    #f))
+
+(define-public (ensure-exact-or-inf x tolerance)
+  (if (inf? x)
+    x
+    (rationalize (inexact->exact x) tolerance)))
 
 (define-public (context-prop symbol type?)
   (set-object-property! symbol 'translation-type? type?)
@@ -91,3 +171,8 @@
          (grob-coord (ly:grob-relative-coordinate grob common dir))
          (base-coord (ly:grob-relative-coordinate base common dir)))
     (- grob-coord base-coord)))
+
+(define-public (grob-array->list-safe grob-array)
+  (if (and grob-array (not (null? grob-array)))
+    (ly:grob-array->list grob-array)
+    '()))

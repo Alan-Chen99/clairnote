@@ -2,8 +2,8 @@
 
 import argparse
 import asyncio
-import glob
 import multiprocessing
+import os
 import shutil
 import tempfile
 from asyncio.subprocess import Process
@@ -43,7 +43,7 @@ async def run_one_test(file: Path, outpath: Path, process: Process):
         aggr = []
         async for line in stdout:
             aggr.append(line)
-            print(f"{file.name}>> {line.decode()}", end="")
+            print(f"{file.name}>> {line.decode(errors='replace')}", end="")
         return b"".join(aggr)
 
     async def show_stderr():
@@ -52,23 +52,39 @@ async def run_one_test(file: Path, outpath: Path, process: Process):
         aggr = []
         async for line in stderr:
             aggr.append(line)
-            print(f"{file.name}> {line.decode()}", end="")
+            print(f"{file.name}> {line.decode(errors='replace')}", end="")
         return b"".join(aggr)
+
+    msgs_list = []
 
     async def wait_one():
         code, out, err = await asyncio.gather(
             process.wait(), show_stdout(), show_stderr()
         )
+        print()
+        for x in msgs_list:
+            print(x)
         if not code == 0:
-            fails.append(file.name)
+            fails.append(str(file))
             print(f"{bcolors.FAIL}{file.name}: Failed with code {code}{bcolors.ENDC}")
             if out:
-                (outpath / file.name).with_suffix(".stdout").write_bytes(out)
+                outpath.with_suffix(".stdout").write_bytes(out)
             if err:
-                (outpath / file.name).with_suffix(".stderr").write_bytes(err)
+                outpath.with_suffix(".stderr").write_bytes(err)
+            print()
 
     await output_func_queue.put(wait_one)
-    await process.wait()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=30)
+    except asyncio.TimeoutError:
+        msgs_list.append(
+            f"{bcolors.FAIL}{file.name}: terminating due to timeout{bcolors.ENDC}"
+        )
+        process.terminate()
+        await asyncio.sleep(1)
+        if process.returncode is None:
+            msgs_list.append(f"{bcolors.FAIL}{file.name}: killing{bcolors.ENDC}")
+            process.kill()
 
 
 async def main():
@@ -77,9 +93,6 @@ async def main():
     parser.add_argument("files", nargs="*")
     parser.add_argument("-l", "--lilypond", type=str, default=shutil.which("lilypond"))
     parser.add_argument("-o", "--out", type=str, required=True)
-    parser.add_argument(
-        "-dn", type=bool, default=False, action=argparse.BooleanOptionalAction
-    )
     parser.add_argument("-i", "--include", type=str, action="append", default=[])
     parser.add_argument("--cpu", type=int, default=multiprocessing.cpu_count())
 
@@ -92,22 +105,43 @@ async def main():
     if args.files:
         args_files = [Path(x).absolute() for x in sorted(args.files)]
     else:
-        args_files = (Path(__file__).parent / "tests").iterdir()
-    files = []
+        args_files = [Path(__file__).parent / "tests"]
+
+    seen = set()
+
+    def walk(p: Path):
+        p = p.resolve()
+        if p not in seen:
+            seen.add(p)
+            if p.is_dir():
+                for c in p.iterdir():
+                    yield from walk(c)
+            elif p.suffix == ".ly":
+                yield p
+
+    files: list[tuple[Path, Path]] = []
+    out_subdirs = set()
     for file in args_files:
-        if file.is_file() and file.suffix == ".ly":
-            files.append(file)
+        for x in walk(file):
+            rel = x.relative_to(file)
+            assert not ".." in rel.parts
+            if rel in out_subdirs:
+                raise RuntimeError(f"conflicting output: {rel}")
+            out_subdirs.add(rel)
+            files.append((x, rel))
+
     files = sorted(files)
 
     print(f"running {len(files)} tests")
 
     ly_args = [
         "-I",
-        Path(__file__).parent,
+        str(Path(__file__).parent),
     ]
     includes = args.include
-    if args.dn:
-        includes = ["clairnote-dn.ly"] + includes
+
+    if len(includes) > 1:
+        raise NotImplementedError()
 
     for x in includes:
         ly_args.append("-d")
@@ -116,6 +150,7 @@ async def main():
     sem = asyncio.Semaphore(args.cpu)
 
     outpath = Path(args.out).resolve()
+    print(f"outputing to {outpath}")
     if not outpath.exists():
         outpath.mkdir(parents=True)
 
@@ -123,29 +158,32 @@ async def main():
 
     with tempfile.TemporaryDirectory() as tmp_dir:
 
-        # print(ly_args)
+        print(f"using tmp home: {tmp_dir}")
 
-        async def test_one(file):
+        async def test_one(file: Path, outrel: Path):
             async with sem:
+                outrel = outpath / outrel.with_suffix("")
+                outrel.parent.mkdir(parents=True, exist_ok=True)
                 proc = await asyncio.create_subprocess_exec(
                     lily_bin,
                     "--output",
-                    str(outpath / file.with_suffix("").name),
+                    str(outrel),
                     *ly_args,
                     str(file),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd="/",
                     env={
-                        # for fontconfig cache
-                        "HOME": tmp_dir
+                        # for fontconfig and guile cache
+                        "HOME": tmp_dir,
+                        "CLAIRNOTE": os.environ.get("CLAIRNOTE") or "default",
                     },
                 )
-                await run_one_test(file, outpath, proc)
+                await run_one_test(file, outrel, proc)
 
         jobs = []
-        for file in files:
-            jobs.append(test_one(file))
+        for file, outrel in files:
+            jobs.append(test_one(file, outrel))
 
         async def run_jobs():
             await asyncio.gather(*jobs)

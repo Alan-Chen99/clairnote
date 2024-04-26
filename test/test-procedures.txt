@@ -19,12 +19,13 @@ file to be tested and version of LilyPond to be used.
 
 2. run the following commands in a terminal,
 
-./test.py -o ./sn-2023-01-03
-./test.py -dn -o ./dn-2023-01-03
+CLAIRNOTE=sn ./test.py -o ./sn-2023-01-03
+CLAIRNOTE=dn ./test.py -o ./dn-2023-01-03
 
 # optional: lilypond regression tests
-path/to/test.py path/to/lilypond-src/input/regression/* -o ./lilypond-rgressions-sn -i test-includes.ly
-path/to/test.py path/to/lilypond-src/input/regression/* -o ./lilypond-rgressions-dn -dn -i test-includes.ly
+CLAIRNOTE=sn path/to/test.py path/to/lilypond-src/input/regression/* -o ./lilypond-rgressions-sn -i test-includes.ly
+CLAIRNOTE=dn path/to/test.py path/to/lilypond-src/input/regression/* -o ./lilypond-rgressions-dn -i test-includes.ly
+
 
 3. Open old and new pdfs in Firefox in a mostly empty profile,
 use a tab sorting extension to sort the tabs, use ctrl+tab and
