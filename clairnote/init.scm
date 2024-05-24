@@ -3,16 +3,17 @@
   (srfi srfi-13)
   (lily))
 
-;; compiled code is faster and have debug info
-(set! %load-should-auto-compile #t)
-(ly:set-option 'compile-scheme-code #t)
-
 ;; for me (on guix) %compile-fallback-path is set to a non writable directory.
 ;; change it so that it is writable
 ;; TODO: other platforms
-(set! %compile-fallback-path
-  (string-append (getenv "HOME")
-    "/.cache/guile/ccache/lilypond/"))
+(unless (and (access? %compile-fallback-path W_OK) (file-is-directory? %compile-fallback-path))
+  (set! %compile-fallback-path
+    (string-append (getenv "HOME")
+      "/.cache/guile/ccache/lilypond/")))
+
+;; compiled code is faster and have debug info
+(set! %load-should-auto-compile #t)
+(ly:set-option 'compile-scheme-code #t)
 
 ;; backtraces are nice
 (debug-enable 'backtrace)

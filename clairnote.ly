@@ -1913,8 +1913,12 @@ clairnoteTypeUrl = ""
     \override Stem.note-collision-threshold = 2
     \override NoteCollision.note-collision-threshold = 2
 
-    \override LedgerLineSpanner.stencil = #cn:LedgerLineSpanner-stencil
-    \override LedgerLineSpanner.layer = #-2
+    % \override LedgerLineSpanner.stencil = #cn:LedgerLineSpanner-stencil
+    % \override LedgerLineSpanner.layer = #10
+    % \override LedgerLineSpanner.color = #"red"
+    \override StaffSymbol.ledger-positions-function = #'(lambda (grob h) '())
+
+    \override NoteHead.ledger-positions = #cn:NoteHead-ledger-positions
 
     % ENGRAVERS
     % There is also the customized Span_stem_engraver (added in LilyPond 2.19.??)

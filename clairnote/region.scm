@@ -385,9 +385,12 @@
 
 (define-public (range-select-floor-remainder range r1 r2 div)
   (let ((ans '()))
-    (for-each! range (s . e)
+    (dolist! ((s . e) range)
       (assert! (not (eqv? s -inf.0)))
       (assert! (not (eqv? e +inf.0)))
+
+      ;; s <= x * div + r1, x * div + r2 <= e
+      ;; (s - r1) / div <= x <= (e - r2) / div
       (let ((a (floor/ (- s r1) div))
             (b (ceiling/ (- e r2) div)))
         (while (<= a b)

@@ -95,6 +95,10 @@
 (define-macro (inc x)
   `(set! ,x (1+ ,x)))
 
+(export assq-setf!)
+(define-macro (assq-setf! alist key val)
+  `(set! ,alist (assq-set! ,alist ,key ,val)))
+
 (export for)
 (define-macro for
   (lambda* (spec #:rest body)

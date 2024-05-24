@@ -96,8 +96,16 @@
       ;;   (staff-fn ctx))
       (staff-fn ctx)
 
-      (set! ctx
-        (assq-set! ctx #:avoid-with-real-ycoord (map region-as-real-ycoord (assq-ref ctx #:avoid))))
+      (assq-setf! ctx #:avoid-union
+        (apply union (assq-ref ctx #:avoid)))
+
+      ;; (select-remainder-y-range (assq-ref ctx #:avoid-union) 12 4 8)
+      ;; (region-debug ctx
+      ;;   (select-remainder-y (shift-y (assq-ref ctx #:avoid-union) -4 0) 4 12))
+      ;; (region-debug ctx (assq-ref ctx #:avoid-union))
+
+      (assq-setf! ctx #:avoid-with-real-ycoord
+        (region-as-real-ycoord (assq-ref ctx #:avoid-union)))
 
       ;; (dbg (assq-ref ctx #:avoid))
       ;; (dbg (assq-ref ctx #:avoid-with-real-ycoord))
