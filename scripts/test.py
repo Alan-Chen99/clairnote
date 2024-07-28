@@ -199,6 +199,7 @@ async def main():
                 print(f"{len(fails)} failed:")
                 for f in fails:
                     print(f)
+                exit(1)
 
 
 loop = asyncio.new_event_loop()
